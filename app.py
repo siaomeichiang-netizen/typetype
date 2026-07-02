@@ -8,7 +8,7 @@ import re
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel(gemini-2.5-flash)
+    model = genai.GenerativeModel('gemini-2.5-flash')
 except Exception as e:
     st.error("系統維護中，請聯繫發包管理員。")
     st.stop()
