@@ -15,7 +15,9 @@ except Exception as e:
 
 # --- 基礎資料庫 ---
 treatments = ["鳳凰電波900發", "海芙音波媚必提", "皮秒雷射(雙機蜂巢)"]
-post_types = ["問題", "心得", "分享"]
+
+# 【需求 1】寫死發文的標題分類
+post_types = ["問題", "分享", "心得", "討論", "閒聊"]
 
 # --- UI 介面設計 ---
 st.set_page_config(page_title="口碑任務生成系統", layout="centered")
@@ -30,46 +32,53 @@ if worker_id:
         chosen_treatment = random.choice(treatments)
         chosen_type = random.choice(post_types)
         
+        # 【需求 3】依據分類動態控制字數
+        if chosen_type in ["問題", "討論", "閒聊"]:
+            length_constraint = "開題內文請嚴格控制在 150 字以內，極度精簡。"
+        else:
+            length_constraint = "開題內文請嚴格控制在 350 字以內。"
+        
         with st.spinner('機器人正在撰寫您的專屬任務腳本，請稍候約 10 秒...'):
             try:
-                # 【優化 Prompt：強制第一行為乾淨標題，並嚴格綁定 PTT 排版邏輯】
+                # 終極優化 Prompt 
                 prompt = f"""
-                你現在是一位非常資深的台灣 PTT 鄉民，超級熟悉 PTT facelift (醫美版) 的生態與用語。
-                請根據以下設定撰寫一篇逼真的貼文與 10 則推文。
-
+                你現在是一位真實的台灣 PTT facelift (醫美版) 鄉民。請根據以下設定撰寫貼文與 10 則推文。
                 設定：發文類型為 [{chosen_type}]，主題關於 {chosen_treatment}。
 
-                【輸出與排版嚴格要求】
-                1. 第一行：絕對只能輸出文章標題，必須包含分類標籤 (如 [{chosen_type}])，不要加上任何 Markdown 符號 (如 ### 或 **)。
-                2. 內文：主文請採用「手動換行」的排版方式（約每 30-40 個中文字元就換行），模擬真實 BBS 介面的視覺斷句，絕對不要出現冗長且沒有換行的文字方塊。
-                3. 推文區：留言請維持當前系統邏輯結構，嚴格遵守 PTT 推文格式（推/→/噓 帳號: 留言內容 時間）。包含正負風向交織。
+                【標題與內文字數限制】
+                1. 第一行只能輸出文章標題，格式為「[{chosen_type}] 標題描述」。
+                2. 標題描述（不含前面的分類標籤）必須嚴格控制在 19 個字元以內！絕對不要太工整或結構完整，要展現口語化與隨性真實感（例如：「鳳凰電波900發 到底痛不痛」而非「想請益大家鳳凰電波900發痛感」）。
+                3. {length_constraint}
+
+                【排版與標點符號嚴格要求 (極度重要)】
+                1. 絕對不要在文末輸出 PTT 的發信站與文章網址區塊 (例如：-- ※ 發信站...)，完全不要出現。
+                2. 內文必須採用「手動換行」排版，模擬真實 BBS 介面的視覺斷句。
+                3. 標點符號限制：全篇(包含內文與推文)絕對不要使用工整的全形標點符號（，。！？）來斷句。
+                4. 你必須極大量使用「半形空格」來代替標點符號！空格斷句的比例必須佔全篇的 70% 以上。
+                5. 模擬不同人的打字習慣，可隨性穿插少量的半形符號 (.,?!) 或全形符號。整體感覺要像用手機快速打字、懶得切換鍵盤的破碎感。
+
+                【推文區格式嚴格限制】
+                請直接輸出 10 則留言，格式必須完全遵守以下規定：
+                - 絕對不要模擬推文的帳號與時間！
+                - 如果是推，請直接輸出「推|留言內容」
+                - 如果是噓，請直接輸出「噓|留言內容」
+                - 如果是箭頭(一般留言)，請不需要加任何標示，直接輸出「留言內容」
+                - 留言內容一樣要符合「大量空格斷句」的隨性風格，包含正負風向。
                 """
                 
                 response = model.generate_content(prompt)
                 script_content = response.text
                 
-                # --- 核心邏輯：提取標題並處理檔名 ---
-                # 1. 將文章拆分成多行，抓取第一行（非空白行）作為標題
+                # --- 提取標題並處理檔名 ---
                 lines = [line.strip() for line in script_content.split('\n') if line.strip()]
                 raw_title = lines[0] if lines else "未命名腳本"
-                
-                # 2. 清除不能作為檔名的特殊字元 (\ / : * ? " < > |) 以及多餘的井字號
                 safe_title = re.sub(r'[\\/*?:"<>|#]', '', raw_title).strip()
-                
-                # 3. 組合新檔名格式：標題_日期_人員名稱.txt
                 date_str = datetime.datetime.now().strftime("%Y%m%d")
                 file_name = f"{safe_title}_{date_str}_{worker_id}.txt"
                 
                 # 檔案內部抬頭設計
-                file_content = f"""=========================================
-【執行人員】{worker_id}
-【生成時間】{datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-【系統設定】{chosen_type} | {chosen_treatment}
-=========================================
-
-{script_content}
-"""
-                # 儲存到暫存區供下載按鈕使用
+                file_content = f"=========================================\n【執行人員】{worker_id}\n【生成時間】{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n【系統設定】{chosen_type} | {chosen_treatment}\n=========================================\n\n{script_content}\n"
+                
                 st.session_state['ready_file_name'] = file_name
                 st.session_state['ready_file_content'] = file_content
                 st.success("✅ 任務生成成功！請點擊下方按鈕下載檔案。")
