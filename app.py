@@ -1,98 +1,84 @@
 import streamlit as st
-import random
 import google.generativeai as genai
-import datetime
-import re
+import gspread
+import random
 
-# --- 基本設定與 API ---
-try:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash')
-except Exception as e:
-    st.error("系統維護中，請聯繫發包管理員。")
-    st.stop()
+# --- 1. 初始化與 API 設定 ---
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# --- 基礎資料庫 ---
-treatments = ["鳳凰電波900發", "海芙音波媚必提", "皮秒雷射(雙機蜂巢)"]
+# 提升創意與隨機性的參數設定
+generation_config = genai.types.GenerationConfig(
+    temperature=0.9,
+    top_p=0.95,
+)
+model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
 
-# 【需求 1】寫死發文的標題分類
-post_types = ["問題", "分享", "心得", "討論", "閒聊"]
+# --- 2. 連線至 Google Sheet ---
+@st.cache_resource(ttl=600) # 快取 10 分鐘避免頻繁讀取
+def load_sheet_data():
+    # 透過 Streamlit Secrets 讀取金鑰並連線
+    gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+    
+    # ⚠️ 請將下方的網址替換成您的 Google Sheet 真實網址 ⚠️
+    sheet_url = "https://docs.google.com/spreadsheets/d/1FRYCNtjHpR6acyoLqf_KCzckFj-FYuOiYBkMtvBfLxk/edit?gid=0#gid=0" 
+    sh = gc.open_by_url(sheet_url)
+    worksheet = sh.sheet1
+    
+    # 抓取所有資料（包含標題列）
+    data = worksheet.get_all_values()
+    return data
 
-# --- UI 介面設計 ---
-st.set_page_config(page_title="口碑任務生成系統", layout="centered")
-st.title("📱 醫美口碑任務產生器")
-st.markdown("請輸入您的專屬代號，點擊生成後，**務必下載檔案並回傳至群組**。")
+# 讀取試算表資料
+sheet_data = load_sheet_data()
+# 剔除第一列標題，剩下純資料
+records = sheet_data[1:] 
 
-worker_id = st.text_input("👤 請輸入您的打工仔代號 (必填，如 W01)", placeholder="例如: W01")
+# 建立 A 欄（大項分類）的選單清單
+category_options = [row[0] for row in records if row[0] != ""]
 
-if worker_id:
-    if st.button("🎲 抽取任務並生成完整腳本", type="primary", use_container_width=True):
-        
-        chosen_treatment = random.choice(treatments)
-        chosen_type = random.choice(post_types)
-        
-        # 【需求 3】依據分類動態控制字數
-        if chosen_type in ["問題", "討論", "閒聊"]:
-            length_constraint = "開題內文請嚴格控制在 150 字以內，極度精簡。"
-        else:
-            length_constraint = "開題內文請嚴格控制在 350 字以內。"
-        
-        with st.spinner('機器人正在撰寫您的專屬任務腳本，請稍候約 10 秒...'):
-            try:
-                # 終極優化 Prompt 
-                prompt = f"""
-                你現在是一位真實的台灣 PTT facelift (醫美版) 鄉民。請根據以下設定撰寫貼文與 10 則推文。
-                設定：發文類型為 [{chosen_type}]，主題關於 {chosen_treatment}。
+# --- 3. 介面設計：動態控制面板 ---
+st.title("🎯 PTT 醫美口碑狙擊系統 (AIO 實體連動版)")
 
-                【標題與內文字數限制】
-                1. 第一行只能輸出文章標題，格式為「[{chosen_type}] 標題描述」。
-                2. 標題描述（不含前面的分類標籤）必須嚴格控制在 19 個字元以內！絕對不要太工整或結構完整，要展現口語化與隨性真實感（例如：「鳳凰電波900發 到底痛不痛」而非「想請益大家鳳凰電波900發痛感」）。
-                3. {length_constraint}
+st.sidebar.header("戰略設定")
+selected_category = st.sidebar.selectbox("步驟一：選擇本次任務主軸", category_options)
+num_posts = st.sidebar.number_input("步驟二：生成篇數", min_value=1, max_value=5, value=1)
 
-                【排版與標點符號嚴格要求 (極度重要)】
-                1. 絕對不要在文末輸出 PTT 的發信站與文章網址區塊 (例如：-- ※ 發信站...)，完全不要出現。
-                2. 內文必須採用「手動換行」排版，模擬真實 BBS 介面的視覺斷句。
-                3. 標點符號限制：全篇(包含內文與推文)絕對不要使用工整的全形標點符號（，。！？）來斷句。
-                4. 你必須極大量使用「半形空格」來代替標點符號！空格斷句的比例必須佔全篇的 70% 以上。
-                5. 模擬不同人的打字習慣，可隨性穿插少量的半形符號 (.,?!) 或全形符號。整體感覺要像用手機快速打字、懶得切換鍵盤的破碎感。
+# 找出使用者選擇的那一列戰略資料
+selected_row = next(row for row in records if row[0] == selected_category)
+# 對應欄位解析
+core_instruments = selected_row[1] # B 欄: 儀器與俗稱
+core_pain_points = selected_row[2] # C 欄: 痛點與困擾
+banned_words = selected_row[4]     # E 欄: 專屬禁語
 
-                【推文區格式嚴格限制】
-                請直接輸出 10 則留言，格式必須完全遵守以下規定：
-                - 絕對不要模擬推文的帳號與時間！
-                - 如果是推，請直接輸出「推|留言內容」
-                - 如果是噓，請直接輸出「噓|留言內容」
-                - 如果是箭頭(一般留言)，請不需要加任何標示，直接輸出「留言內容」
-                - 留言內容一樣要符合「大量空格斷句」的隨性風格，包含正負風向。
-                """
-                
-                response = model.generate_content(prompt)
-                script_content = response.text
-                
-                # --- 提取標題並處理檔名 ---
-                lines = [line.strip() for line in script_content.split('\n') if line.strip()]
-                raw_title = lines[0] if lines else "未命名腳本"
-                safe_title = re.sub(r'[\\/*?:"<>|#]', '', raw_title).strip()
-                date_str = datetime.datetime.now().strftime("%Y%m%d")
-                file_name = f"{safe_title}_{date_str}_{worker_id}.txt"
-                
-                # 檔案內部抬頭設計
-                file_content = f"=========================================\n【執行人員】{worker_id}\n【生成時間】{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n【系統設定】{chosen_type} | {chosen_treatment}\n=========================================\n\n{script_content}\n"
-                
-                st.session_state['ready_file_name'] = file_name
-                st.session_state['ready_file_content'] = file_content
-                st.success("✅ 任務生成成功！請點擊下方按鈕下載檔案。")
-                
-            except Exception as e:
-                st.error(f"生成失敗，請再試一次。錯誤訊息: {e}")
+# --- 4. 生成按鈕與三色骰子邏輯 ---
+if st.button("🚀 啟動生成"):
+    for i in range(num_posts):
+        with st.spinner(f"正在為您編寫第 {i+1} 篇實戰文章..."):
+            
+            # 【🎲 三色骰子：AI 內部隨機拉霸機制】
+            prompt = f"""
+            你現在是一位真實的台灣 PTT facelift (醫美版) 鄉民。
+            請根據以下「戰略參數」與「隨機骰子」，產出 1 篇具備強烈真實感的貼文，以及底下附帶的 10 則推文。
 
-# --- 強制下載動線 ---
-if 'ready_file_content' in st.session_state:
-    st.markdown("---")
-    st.download_button(
-        label=f"📥 下載檔案：{st.session_state['ready_file_name']}",
-        data=st.session_state['ready_file_content'],
-        file_name=st.session_state['ready_file_name'],
-        mime="text/plain",
-        use_container_width=True
-    )
+            【戰略參數】
+            - 任務主軸：{selected_category}
+            - 必須隨機挑選 1~2 個穿插的儀器/俗稱：{core_instruments}
+            - 必須隨機挑選 1~2 個抱怨的核心痛點：{core_pain_points}
+
+            【🎲 隨機劇本生成指令】(請每次都從以下三個維度隨機選擇一種風格來撰寫)
+            1. 隨機題型：(A) 兩台儀器比較求薦、(B) 單純痛點求解答、(C) 單一儀器細節探討。
+            2. 隨機情境：(A) 剛拿獎金預算有限、(B) 重大聚會前急救、(C) 被身邊人無意間嫌老、(D) 朋友打完被生火但怕痛、(E) 滑舊照產生嚴重焦慮。
+            3. 推文風向：(A) 兩派擁護者戰翻、(B) 理性分析派科普、(C) 滅火酸民與護航派交戰。
+
+            【PTT 專屬排版與格式限制 (違反即失敗)】
+            1. 主文格式：這是在 PTT 發文，請強制使用手動斷行（Line-break），不要寫成長篇大論的段落，維持 BBS 的閱讀節奏。
+            2. 推文格式：推文請維持獨立的邏輯結構（推、噓、→），並適當使用半形空格斷句。
+            3. 字數控制：主文控制在 250 - 350 字以內，不宜過長。推文必須剛好 10 則。
+            4. 絕對禁語：{banned_words}。禁止在文中出現「潛水很久」、「大大」、「大家好」等刻板用語。
+            """
+
+            response = model.generate_content(prompt)
+            st.markdown(f"### 第 {i+1} 篇")
+            st.write(response.text)
+            st.markdown("---")
+    st.success("✅ 任務執行完畢！")
