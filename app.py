@@ -36,7 +36,8 @@ num_posts = st.sidebar.number_input("步驟二：生成篇數", min_value=1, max
 selected_row = next(row for row in records if row[0] == selected_category)
 core_instruments = selected_row[1] 
 core_pain_points = selected_row[2] 
-banned_words = selected_row[4]     
+task_instructions = selected_row[3] # 加上這行
+banned_words = selected_row[4]   
 
 # --- 4. 生成按鈕與嚴格規範邏輯 ---
 if st.button("🚀 啟動生成"):
